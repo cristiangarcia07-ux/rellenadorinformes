@@ -1,5 +1,16 @@
 <?php
 declare(strict_types=1);
+error_reporting(E_ALL);
+ini_set('display_errors', '1');
+
+set_exception_handler(function(Throwable $e) {
+    echo '<pre style="color:red;background:white;padding:20px;">';
+    echo 'Error: ' . htmlspecialchars($e->getMessage()) . "\n\n";
+    echo 'File: ' . htmlspecialchars($e->getFile()) . ':' . $e->getLine() . "\n\n";
+    echo htmlspecialchars($e->getTraceAsString());
+    echo '</pre>';
+    exit;
+});
 
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'db.php';
 
@@ -14,9 +25,9 @@ $fillableFields = [
     'observaciones_0', 'observaciones_1', 'observaciones_2', 'observaciones_3', 'observaciones_4',
 ];
 
-function h(string $value): string
+function h(mixed $value): string
 {
-    return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
 }
 
 function field(array $source, string $name): string
@@ -49,6 +60,9 @@ function form_title(array $values): string
 
 function pdf_hex_string(string $value): string
 {
+    if (!function_exists('mb_convert_encoding')) {
+        throw new RuntimeException('La extensión mbstring no está instalada.');
+    }
     $value = str_replace(["\r\n", "\r"], "\n", $value);
     $utf16 = mb_convert_encoding($value, 'UTF-16BE', 'UTF-8');
     return '<FEFF' . strtoupper(bin2hex($utf16)) . '>';
@@ -170,8 +184,14 @@ $selectedId = filter_input(INPUT_GET, 'id', FILTER_VALIDATE_INT) ?: null;
 $formValues = [];
 
 if ($pdo && $selectedId) {
-    $formValues = fetch_report_values($pdo, $selectedId);
-    if (!$formValues) {
+    try {
+        $formValues = fetch_report_values($pdo, $selectedId);
+        if (!$formValues) {
+            $selectedId = null;
+        }
+    } catch (Throwable $e) {
+        $message = 'Error al cargar la ficha: ' . $e->getMessage();
+        $messageType = 'error';
         $selectedId = null;
     }
 }
@@ -238,7 +258,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $savedForms = $pdo ? fetch_saved_reports($pdo) : [];
-$formId = $selectedId ?: '';
+$formId = (string)($selectedId ?: '');
 $rows = [
     ['0', '1'],
     ['1', '2'],
