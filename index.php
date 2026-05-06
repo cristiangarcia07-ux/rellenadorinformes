@@ -180,14 +180,31 @@ try {
 }
 
 $savedForms = $pdo ? fetch_saved_reports($pdo) : [];
+$centros_docentes = $pdo ? fetch_all_centros_docentes($pdo) : [];
+$centros_trabajo = $pdo ? fetch_all_centros_trabajo($pdo) : [];
+$ciclos = $pdo ? fetch_all_ciclos($pdo) : [];
 $selectedId = filter_input(INPUT_GET, 'id', FILTER_VALIDATE_INT) ?: null;
 $formValues = [];
+$selected_centro_docente_id = null;
+$selected_centro_trabajo_id = null;
+$selected_ciclo_id = null;
 
 if ($pdo && $selectedId) {
     try {
         $formValues = fetch_report_values($pdo, $selectedId);
         if (!$formValues) {
             $selectedId = null;
+        } else {
+            $stmt = $pdo->prepare("SELECT ces.id_centro_docente, cts.id_centro_trabajo, cs.id_ciclo
+                FROM centroeduc_semana ces
+                INNER JOIN centrotrabajo_semana cts ON cts.id_semana = ces.id_semana
+                INNER JOIN ciclos_semana cs ON cs.id_semana = ces.id_semana
+                WHERE ces.id_semana = ?");
+            $stmt->execute([$selectedId]);
+            $relatedIds = $stmt->fetch();
+            $selected_centro_docente_id = $relatedIds['id_centro_docente'] ?? null;
+            $selected_centro_trabajo_id = $relatedIds['id_centro_trabajo'] ?? null;
+            $selected_ciclo_id = $relatedIds['id_ciclo'] ?? null;
         }
     } catch (Throwable $e) {
         $message = 'Error al cargar la ficha: ' . $e->getMessage();
@@ -215,7 +232,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $selectedId = null;
             $formValues = [];
         } elseif ($action === 'save') {
-            $selectedId = save_report($pdo, $formValues, $selectedId);
+            $existing_docente_id = filter_input(INPUT_POST, 'existing_centro_docente_id', FILTER_VALIDATE_INT) ?: null;
+            $existing_trabajo_id = filter_input(INPUT_POST, 'existing_centro_trabajo_id', FILTER_VALIDATE_INT) ?: null;
+            $existing_ciclo_id = filter_input(INPUT_POST, 'existing_ciclo_id', FILTER_VALIDATE_INT) ?: null;
+            
+            $selectedId = save_report($pdo, $formValues, $selectedId, $existing_docente_id, $existing_trabajo_id, $existing_ciclo_id);
             $message = 'Ficha guardada.';
         } elseif ($action === 'export_all') {
             $exportDir = __DIR__ . DIRECTORY_SEPARATOR . 'exports';
@@ -273,6 +294,87 @@ $rows = [
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Rellenador de ficha semanal</title>
+    <script>
+        const centrosDocentes = <?= json_encode($centros_docentes) ?>;
+        const centrosTrabajo = <?= json_encode($centros_trabajo) ?>;
+        const ciclos = <?= json_encode($ciclos) ?>;
+
+        function fillCentroDocente(select) {
+            const selectedId = select.value;
+            if (!selectedId) {
+                document.getElementsByName('centro_docente')[0].value = '';
+                document.getElementsByName('profesor')[0].value = '';
+                document.getElementsByName('alumno')[0].value = '';
+                document.getElementById('existing_centro_docente_id').value = '';
+                return;
+            }
+            const data = centrosDocentes.find(item => item.id == selectedId);
+            if (data) {
+                document.getElementsByName('centro_docente')[0].value = data.centro_docente || '';
+                document.getElementsByName('profesor')[0].value = data.nombre_y_apellidos || '';
+                document.getElementsByName('alumno')[0].value = data.nombre_alumno || '';
+                document.getElementById('existing_centro_docente_id').value = data.id;
+            }
+        }
+
+        function resetCentroDocente() {
+            document.getElementById('existing_centro_docente_select').value = '';
+            document.getElementById('existing_centro_docente_id').value = '';
+        }
+
+        function fillCentroTrabajo(select) {
+            const selectedId = select.value;
+            if (!selectedId) {
+                document.getElementsByName('centro_trabajo')[0].value = '';
+                document.getElementsByName('tutor')[0].value = '';
+                document.getElementById('existing_centro_trabajo_id').value = '';
+                return;
+            }
+            const data = centrosTrabajo.find(item => item.id == selectedId);
+            if (data) {
+                document.getElementsByName('centro_trabajo')[0].value = data.nombre_centro_trabajo || '';
+                document.getElementsByName('tutor')[0].value = data.tutor_trabajo || '';
+                document.getElementById('existing_centro_trabajo_id').value = data.id;
+            }
+        }
+
+        function resetCentroTrabajo() {
+            document.getElementById('existing_centro_trabajo_select').value = '';
+            document.getElementById('existing_centro_trabajo_id').value = '';
+        }
+
+        function fillCiclo(select) {
+            const selectedId = select.value;
+            if (!selectedId) {
+                document.getElementsByName('ciclo')[0].value = '';
+                document.getElementsByName('grado')[0].value = '';
+                document.getElementById('existing_ciclo_id').value = '';
+                return;
+            }
+            const data = ciclos.find(item => item.id == selectedId);
+            if (data) {
+                document.getElementsByName('ciclo')[0].value = data.nombre || '';
+                document.getElementsByName('grado')[0].value = data.grado || '';
+                document.getElementById('existing_ciclo_id').value = data.id;
+            }
+        }
+
+        function resetCiclo() {
+            document.getElementById('existing_ciclo_select').value = '';
+            document.getElementById('existing_ciclo_id').value = '';
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            const centroDocenteSelect = document.getElementById('existing_centro_docente_select');
+            if (centroDocenteSelect.value) fillCentroDocente(centroDocenteSelect);
+            
+            const centroTrabajoSelect = document.getElementById('existing_centro_trabajo_select');
+            if (centroTrabajoSelect.value) fillCentroTrabajo(centroTrabajoSelect);
+            
+            const cicloSelect = document.getElementById('existing_ciclo_select');
+            if (cicloSelect.value) fillCiclo(cicloSelect);
+        });
+    </script>
     <style>
         * {
             box-sizing: border-box;
@@ -485,6 +587,9 @@ $rows = [
     <div class="shell">
         <form class="panel" method="post" autocomplete="on">
             <input type="hidden" name="id" value="<?= h($formId) ?>">
+            <input type="hidden" name="existing_centro_docente_id" id="existing_centro_docente_id" value="<?= h((string)($selected_centro_docente_id ?? '')) ?>">
+            <input type="hidden" name="existing_centro_trabajo_id" id="existing_centro_trabajo_id" value="<?= h((string)($selected_centro_trabajo_id ?? '')) ?>">
+            <input type="hidden" name="existing_ciclo_id" id="existing_ciclo_id" value="<?= h((string)($selected_ciclo_id ?? '')) ?>">
             <h1>Ficha semanal</h1>
             <p>El documento de la derecha es el PDF original. Puedes guardar la ficha y descargar una copia rellena.</p>
 
@@ -545,27 +650,60 @@ $rows = [
 
             <fieldset>
                 <legend>Datos</legend>
+                
+                <label>Seleccionar entrada existente de centro docente
+                    <select name="existing_centro_docente_select" id="existing_centro_docente_select" onchange="fillCentroDocente(this)">
+                        <option value="">-- Nueva entrada --</option>
+                        <?php foreach ($centros_docentes as $cd): ?>
+                            <option value="<?= h($cd['id']) ?>" <?= $selected_centro_docente_id == $cd['id'] ? 'selected' : '' ?>>
+                                <?= h($cd['nombre_alumno'] . ' - ' . $cd['centro_docente']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
                 <label>Centro docente
-                    <input name="centro_docente" value="<?= h(field($formValues, 'centro_docente')) ?>">
-                </label>
-                <label>Centro de trabajo
-                    <input name="centro_trabajo" value="<?= h(field($formValues, 'centro_trabajo')) ?>">
-                </label>
-                <label>Tutor/a laboral
-                    <input name="tutor" value="<?= h(field($formValues, 'tutor')) ?>">
+                    <input name="centro_docente" value="<?= h(field($formValues, 'centro_docente')) ?>" oninput="resetCentroDocente()">
                 </label>
                 <label>Profesor/a responsable
-                    <input name="profesor" value="<?= h(field($formValues, 'profesor')) ?>">
+                    <input name="profesor" value="<?= h(field($formValues, 'profesor')) ?>" oninput="resetCentroDocente()">
                 </label>
                 <label>Alumno/a
-                    <input name="alumno" value="<?= h(field($formValues, 'alumno')) ?>">
+                    <input name="alumno" value="<?= h(field($formValues, 'alumno')) ?>" oninput="resetCentroDocente()">
+                </label>
+                
+                <label>Seleccionar entrada existente de centro de trabajo
+                    <select name="existing_centro_trabajo_select" id="existing_centro_trabajo_select" onchange="fillCentroTrabajo(this)">
+                        <option value="">-- Nueva entrada --</option>
+                        <?php foreach ($centros_trabajo as $ct): ?>
+                            <option value="<?= h($ct['id']) ?>" <?= $selected_centro_trabajo_id == $ct['id'] ? 'selected' : '' ?>>
+                                <?= h($ct['nombre_centro_trabajo'] . ' - ' . $ct['tutor_trabajo']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <label>Centro de trabajo
+                    <input name="centro_trabajo" value="<?= h(field($formValues, 'centro_trabajo')) ?>" oninput="resetCentroTrabajo()">
+                </label>
+                <label>Tutor/a laboral
+                    <input name="tutor" value="<?= h(field($formValues, 'tutor')) ?>" oninput="resetCentroTrabajo()">
+                </label>
+                
+                <label>Seleccionar entrada existente de ciclo
+                    <select name="existing_ciclo_select" id="existing_ciclo_select" onchange="fillCiclo(this)">
+                        <option value="">-- Nueva entrada --</option>
+                        <?php foreach ($ciclos as $c): ?>
+                            <option value="<?= h($c['id']) ?>" <?= $selected_ciclo_id == $c['id'] ? 'selected' : '' ?>>
+                                <?= h($c['nombre'] . ' - ' . $c['grado']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
                 </label>
                 <div class="grid">
                     <label>Ciclo formativo
-                        <input name="ciclo" value="<?= h(field($formValues, 'ciclo')) ?>">
+                        <input name="ciclo" value="<?= h(field($formValues, 'ciclo')) ?>" oninput="resetCiclo()">
                     </label>
                     <label>Grado
-                        <input name="grado" value="<?= h(field($formValues, 'grado')) ?>">
+                        <input name="grado" value="<?= h(field($formValues, 'grado')) ?>" oninput="resetCiclo()">
                     </label>
                 </div>
             </fieldset>
